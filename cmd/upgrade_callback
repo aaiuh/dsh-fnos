@@ -1,0 +1,49 @@
+#!/bin/bash
+# 升级回调：停服务 -> 按新包里的 VERSION 重装 dsh -> 由平台随后 start。
+# 用户数据（会话、配置、API Key）全部在 @appshare/dsh-fnos 下，升级不动它。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+VOL="${TRIM_APPDEST_VOL:-/vol1}"
+APP_HOME="${VOL}/@appshare/dsh-fnos"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+
+NODE_BIN="/var/apps/nodejs_v24/target/bin"
+NPM_PREFIX="${APP_HOME}/.npm-global"
+
+REGISTRY="${wizard_npm_registry:-https://registry.npmmirror.com}"
+PKG="@deepseek-ai/dsh"
+
+mkdir -p "${PKGVAR}" "${APP_HOME}" "${NPM_PREFIX}" 2>/dev/null
+LOG="${PKGVAR}/upgrade.log"
+exec > >(tee -a "${LOG}") 2>&1
+
+say() { printf '[%s] [upgrade] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+say "先停掉旧服务"
+bash "${APPDEST}/cmd/main" stop >/dev/null 2>&1 || true
+
+DSH_VER=""
+for f in "${APPDEST}/VERSION" "${APPDEST}/cmd/VERSION"; do
+    [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
+done
+[ -n "${DSH_VER}" ] || { say "ERROR 包内缺 VERSION，放弃升级"; exit 1; }
+
+export PATH="${NODE_BIN}:${PATH}"
+export HOME="${APP_HOME}"
+export DSH_HOME="${APP_HOME}"
+export NPM_CONFIG_PREFIX="${NPM_PREFIX}"
+export NPM_CONFIG_CACHE="${APP_HOME}/.npm-cache"
+
+say "升级到 ${PKG}@${DSH_VER}（源 ${REGISTRY}）"
+if ! npm install -g "${PKG}@${DSH_VER}" \
+        --prefix "${NPM_PREFIX}" \
+        --registry "${REGISTRY}" \
+        --no-audit --no-fund --loglevel=info; then
+    say "ERROR 升级失败，旧版本大概率还在，应用中心会尝试回滚"
+    exit 1
+fi
+
+"${NPM_PREFIX}/bin/dsh" --version > "${APP_HOME}/.installed-version" 2>/dev/null || true
+say "升级完成：$(${NPM_PREFIX}/bin/dsh --version 2>/dev/null || echo 未知)"
+exit 0
