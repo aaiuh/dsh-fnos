@@ -5,12 +5,15 @@ set -uo pipefail
 
 APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
 PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+# cmd 脚本的真实位置：TRIM_APPDEST 指向 app.tgz 解压出来的程序数据目录
+# （/vol1/@appcenter/<app>），而 cmd/ 在 /var/apps/<app>/cmd，两者不是一个地方。
+CMD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="${PKGVAR}/info.log"
 
 say() { printf '[%s] [uninstall] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${LOG}" 2>/dev/null; }
 
 say "停止服务"
-bash "${APPDEST}/cmd/main" stop >/dev/null 2>&1 || true
+bash "${CMD_DIR}/main" stop >/dev/null 2>&1 || true
 
 # 把还在跑的 dsh 进程收干净，避免占着端口导致重装失败
 for p in $(pgrep -f "dsh.*--profile web" 2>/dev/null); do

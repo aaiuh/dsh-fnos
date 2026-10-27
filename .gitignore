@@ -1,7 +1,2 @@
-fpk-test/
-smoke/
-*.fpk
-dist/
-node_modules/
-__pycache__/
 app.tgz
+_pkg/

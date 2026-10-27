@@ -1,16 +1,29 @@
 #!/bin/bash
 # 配置回调：飞牛应用中心要求本文件存在（缺失会 10111）。
 #
-# 把安装向导 / 设置页里的三项值持久化到 PKGVAR/app.env，
-# 让 cmd/main 在 start 时不必依赖平台是否还在注入向导环境变量。
+# 三件事：
+#   1. 把向导里填的端口/地址/npm 源/版本落盘到 PKGVAR/app.env，
+#      让 cmd/main start 不必依赖平台是否还在注入向导环境变量；
+#   2. 用户在「应用设置」里换了 dsh 版本时，就地换版本并重启；
+#   3. 端口或版本变化时重启服务，让改动真正生效。
+#
 # 空值不覆盖旧值；但 wizard_host 被显式清空时表示「自动探测」，要写入空值。
 set -uo pipefail
 
 APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
 PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
-ENV_FILE="${PKGVAR}/app.env"
+# cmd 脚本的真实位置：TRIM_APPDEST 指向 app.tgz 解压出来的程序数据目录
+# （/vol1/@appcenter/<app>），而 cmd/ 在 /var/apps/<app>/cmd，两者不是一个地方。
+CMD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_HOME="${TRIM_APPDEST_VOL:-/vol1}/@appshare/dsh-fnos"
 
-mkdir -p "${PKGVAR}" 2>/dev/null || true
+NODE_BIN="/var/apps/nodejs_v24/target/bin"
+NPM_PREFIX="${APP_HOME}/.npm-global"
+DSH_BIN="${NPM_PREFIX}/bin/dsh"
+PKG="@deepseek-ai/dsh"
+
+ENV_FILE="${PKGVAR}/app.env"
+mkdir -p "${PKGVAR}" "${APP_HOME}" 2>/dev/null || true
 
 say() { printf '[%s] [config_callback] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${PKGVAR}/info.log" 2>/dev/null; }
 
@@ -22,17 +35,94 @@ old_of() {
 PORT="${ui_port:-${wizard_port:-$(old_of ui_port)}}"
 HOST="${wizard_host-$(old_of wizard_host)}"
 REG="${wizard_npm_registry:-$(old_of wizard_npm_registry)}"
+VER_WANT="${dsh_version:-$(old_of dsh_version)}"
+
+OLD_PORT="$(old_of ui_port)"
+OLD_VER="$(cat "${APP_HOME}/.installed-version" 2>/dev/null | tr -d '[:space:]')"
 
 TMP="${ENV_FILE}.tmp.$$"
 {
     [ -n "${PORT}" ] && printf 'ui_port=%s\n' "${PORT}"
     printf 'wizard_host=%s\n' "${HOST}"
     [ -n "${REG}" ] && printf 'wizard_npm_registry=%s\n' "${REG}"
+    [ -n "${VER_WANT}" ] && printf 'dsh_version=%s\n' "${VER_WANT}"
 } > "${TMP}" 2>/dev/null && mv -f "${TMP}" "${ENV_FILE}" 2>/dev/null || {
     rm -f "${TMP}" 2>/dev/null
     say "WARN 写入 ${ENV_FILE} 失败，本次设置仅在当前流程生效"
     exit 0
 }
+say "已保存：端口 ${PORT:-3080}  地址 ${HOST:-自动}  源 ${REG:-默认}  版本 ${VER_WANT:-按包内默认}"
 
-say "已保存：端口 ${PORT:-3080}  地址 ${HOST:-自动}  源 ${REG:-默认}"
+# 解析 tag 别名（latest / next / alpha）成具体版本号
+resolve_version() {
+    local want="$1"
+    case "${want}" in
+        latest|next|alpha)
+            PATH="${NODE_BIN}:${PATH}" npm view "${PKG}" "dist-tags.${want}" \
+                --registry "${REG:-https://registry.npmmirror.com}" 2>/dev/null | tr -d '[:space:]'
+            ;;
+        *) printf '%s' "${want}" ;;
+    esac
+}
+
+CHANGED=0
+
+if [ -n "${VER_WANT}" ] && [ -x "${DSH_BIN}" ]; then
+    TARGET="$(resolve_version "${VER_WANT}")"
+    if [ -z "${TARGET}" ]; then
+        say "WARN 解析版本 ${VER_WANT} 失败，保持当前版本 ${OLD_VER}"
+    elif [ "${TARGET}" != "${OLD_VER}" ]; then
+        say "切换 dsh 版本：${OLD_VER:-未装} → ${TARGET}"
+        bash "${CMD_DIR}/main" stop >/dev/null 2>&1 || true
+
+        export PATH="${NODE_BIN}:${PATH}"
+        export HOME="${APP_HOME}" DSH_HOME="${APP_HOME}"
+        export NPM_CONFIG_PREFIX="${NPM_PREFIX}"
+        export NPM_CONFIG_CACHE="${APP_HOME}/.npm-cache"
+
+        if npm install -g "${PKG}@${TARGET}" \
+                --prefix "${NPM_PREFIX}" \
+                --registry "${REG:-https://registry.npmmirror.com}" \
+                --no-audit --no-fund --loglevel=warn >> "${PKGVAR}/install.log" 2>&1; then
+            "${DSH_BIN}" --version > "${APP_HOME}/.installed-version" 2>/dev/null || true
+            say "版本切换完成：$(cat "${APP_HOME}/.installed-version" 2>/dev/null)"
+        else
+            say "ERROR 切换版本失败，回退到 ${OLD_VER}"
+            say "ERROR 详见 ${PKGVAR}/install.log"
+            if [ -n "${OLD_VER}" ]; then
+                npm install -g "${PKG}@${OLD_VER}" \
+                    --prefix "${NPM_PREFIX}" \
+                    --registry "${REG:-https://registry.npmmirror.com}" \
+                    --no-audit --no-fund --loglevel=warn >> "${PKGVAR}/install.log" 2>&1 || true
+                "${DSH_BIN}" --version > "${APP_HOME}/.installed-version" 2>/dev/null || true
+            fi
+        fi
+        CHANGED=1
+    fi
+fi
+
+# 端口变了也要重启，否则改完没反应
+if [ -n "${PORT}" ] && [ -n "${OLD_PORT}" ] && [ "${PORT}" != "${OLD_PORT}" ]; then
+    say "端口 ${OLD_PORT} → ${PORT}，需要重启"
+    CHANGED=1
+fi
+
+if [ "${CHANGED}" = "1" ]; then
+    # 必须经应用中心重启：直接调 cmd/main start 虽然能拉起进程，
+    # 但平台不知道，应用中心会一直停在「启动中」（实测 status=start）。
+    restart_app() {
+        local cli="/usr/local/bin/appcenter-cli"
+        if [ -x "${cli}" ]; then
+            "${cli}" stop dsh-fnos >/dev/null 2>&1 || true
+            sleep 2
+            if "${cli}" start dsh-fnos >/dev/null 2>&1; then
+                say "已通过应用中心重启"
+                return 0
+            fi
+        fi
+        bash "${CMD_DIR}/main" start >/dev/null 2>&1 && say "已直接重启服务（应用中心状态可能不刷新，刷新页面即可）"
+    }
+    restart_app
+fi
+
 exit 0

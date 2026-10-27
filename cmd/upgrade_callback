@@ -7,6 +7,9 @@ APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
 VOL="${TRIM_APPDEST_VOL:-/vol1}"
 APP_HOME="${VOL}/@appshare/dsh-fnos"
 PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+# cmd 脚本的真实位置：TRIM_APPDEST 指向 app.tgz 解压出来的程序数据目录
+# （/vol1/@appcenter/<app>），而 cmd/ 在 /var/apps/<app>/cmd，两者不是一个地方。
+CMD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NODE_BIN="/var/apps/nodejs_v24/target/bin"
 NPM_PREFIX="${APP_HOME}/.npm-global"
@@ -21,12 +24,25 @@ exec > >(tee -a "${LOG}") 2>&1
 say() { printf '[%s] [upgrade] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
 say "先停掉旧服务"
-bash "${APPDEST}/cmd/main" stop >/dev/null 2>&1 || true
+bash "${CMD_DIR}/main" stop >/dev/null 2>&1 || true
 
 DSH_VER=""
-for f in "${APPDEST}/VERSION" "${APPDEST}/../VERSION" "${APPDEST}/cmd/VERSION"; do
-    [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
-done
+# 与 install_callback 同规则：向导选择优先，包内 VERSION 兜底
+if [ -n "${dsh_version:-}" ]; then
+    case "${dsh_version}" in
+        latest|next|alpha)
+            DSH_VER=$(PATH="${NODE_BIN}:${PATH}" npm view "${PKG}" "dist-tags.${dsh_version}" \
+                        --registry "${REGISTRY}" 2>/dev/null | tr -d '[:space:]')
+            say "向导选择 ${dsh_version} → 解析为 ${DSH_VER:-（失败）}"
+            ;;
+        *) DSH_VER="${dsh_version}" ;;
+    esac
+fi
+if [ -z "${DSH_VER}" ]; then
+    for f in "${APPDEST}/VERSION" "${APPDEST}/../VERSION" "${APPDEST}/cmd/VERSION"; do
+        [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
+    done
+fi
 [ -n "${DSH_VER}" ] || { say "ERROR 包内缺 VERSION，放弃升级"; exit 1; }
 
 export PATH="${NODE_BIN}:${PATH}"

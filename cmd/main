@@ -73,23 +73,59 @@ port_listening() {
     ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PORT}$"
 }
 
+# 占用监听端口的进程号（可能为空）。用于收掉上次异常退出或平台重启后遗留的孤儿：
+# 它们占着端口，会让 start 误判「已在运行」，结果跑的还是旧版本的进程。
+port_pids() {
+    ss -ltnp 2>/dev/null | awk -v p=":${PORT}" '$4 ~ p"$"' \
+        | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+}
+
+kill_wait() {
+    local target="$1" i=0
+    [ -n "${target}" ] || return 0
+    # -PID 表示整个进程组（setsid 拉起的），失败再退回单进程
+    kill -TERM "-${target}" 2>/dev/null || kill -TERM "${target}" 2>/dev/null || true
+    while pid_alive "${target}" && [ "${i}" -lt 15 ]; do sleep 1; i=$((i + 1)); done
+    if pid_alive "${target}"; then
+        kill -KILL "-${target}" 2>/dev/null || kill -KILL "${target}" 2>/dev/null || true
+    fi
+    return 0
+}
+
 stop_app() {
     local pid=""
     [ -r "${PID_FILE}" ] && pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+
     if pid_alive "${pid}"; then
         log_info "停止 dsh（pid ${pid}）"
-        kill -TERM "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
-        local i=0
-        while pid_alive "${pid}" && [ "${i}" -lt 15 ]; do sleep 1; i=$((i + 1)); done
-        pid_alive "${pid}" && kill -KILL "-${pid}" 2>/dev/null || true
+        kill_wait "${pid}"
     fi
-    # 收尸：端口上残留的 dsh 进程（上次异常退出留下的孤儿）
-    for p in $(pgrep -f "dsh.*--profile web" 2>/dev/null); do
+
+    # 收尸一：按可执行文件路径匹配（dsh 的启动参数里没有 --profile，按参数猜会漏）
+    for p in $(pgrep -f "${DSH_BIN} web" 2>/dev/null); do
         [ "${p}" = "${pid}" ] && continue
-        kill -TERM "${p}" 2>/dev/null || true
+        log_info "收掉残留进程 pid ${p}"
+        kill_wait "${p}"
     done
+
+    # 收尸二：按端口兜底，防止路径匹配也被绕过
+    for p in $(port_pids); do
+        [ "${p}" = "${pid}" ] && continue
+        log_info "收掉占用端口 ${PORT} 的进程 pid ${p}"
+        kill_wait "${p}"
+    done
+
     rm -f "${PID_FILE}"
+
+    # 端口没释放就不要报成功，否则上层会以为可以立刻重启
+    local i=0
+    while port_listening && [ "${i}" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+    if port_listening; then
+        log_error "端口 ${PORT} 仍被占用，未能完全停止"
+        return 1
+    fi
     log_info "已停止"
+    return 0
 }
 
 start_app() {
@@ -98,8 +134,16 @@ start_app() {
         return 1
     fi
     if port_listening; then
-        log_info "端口 ${PORT} 已在监听，视为运行中"
-        return 0
+        local cur=""
+        [ -r "${PID_FILE}" ] && cur=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if pid_alive "${cur}"; then
+            log_info "端口 ${PORT} 已在监听且进程是本应用的（pid ${cur}），视为运行中"
+            return 0
+        fi
+        # 端口被别的进程占着（上次没停干净的孤儿）。直接认为「在运行」会让
+        # 版本切换后仍然跑旧进程，所以先清干净再说。
+        log_info "端口 ${PORT} 被非本应用记录的进程占用，先清理"
+        stop_app || return 1
     fi
 
     local host

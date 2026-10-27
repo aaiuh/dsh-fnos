@@ -3,6 +3,35 @@
         "stepTitle": "服务配置",
         "items": [
             {
+                "type": "select",
+                "field": "dsh_version",
+                "label": "dsh 版本",
+                "initValue": "0.2.1-rc.2",
+                "options": [
+                    {
+                        "label": "0.2.1-rc.2（latest · 2026-10-17）",
+                        "value": "0.2.1-rc.2"
+                    },
+                    {
+                        "label": "0.2.1-rc.4（next · 2026-10-26）",
+                        "value": "0.2.1-rc.4"
+                    },
+                    {
+                        "label": "0.2.1-rc.3（2026-10-23）",
+                        "value": "0.2.1-rc.3"
+                    },
+                    {
+                        "label": "0.2.1-rc.1（2026-10-17）",
+                        "value": "0.2.1-rc.1"
+                    },
+                    {
+                        "label": "0.2.1-alpha.5（2026-10-16）",
+                        "value": "0.2.1-alpha.5"
+                    }
+                ],
+                "helpText": "装哪个版本的 dsh 本体。latest 是上游标记的稳定发布，next 是更新的预发布；两者不一定相同，这里按实际发布列出。装完也能在应用设置里改，改完会自动换版本并重启。"
+            },
+            {
                 "type": "text",
                 "field": "ui_port",
                 "label": "监听端口",
