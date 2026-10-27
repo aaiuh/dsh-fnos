@@ -6,17 +6,30 @@
 
 在飞牛应用中心上传 `dsh-fnos-<版本>-x86.fpk`，或者把本仓库加进集合源后用 FnDepot 安装。
 
-安装向导里可以改三样东西：
+安装向导里可以改四样东西：
 
 | 项 | 默认 | 说明 |
 |---|---|---|
+| **dsh 版本** | 上游 `latest` 对应版本 | 下拉列出最近 5 个已发布版本，标注它属于 `latest` 还是 `next` |
 | 监听端口 | `3080` | DSH Web 的端口 |
 | 监听地址 | 留空 | 留空自动取主网卡 IPv4；dsh 不接受 `0.0.0.0` |
 | npm 源 | `registry.npmmirror.com` | 安装时拉 dsh 本体用的源 |
 
+**dsh 版本为什么要自己选**：上游的 dist-tags 不跟发版走。发到 `0.2.1-rc.4` 时 `latest` 仍停在 `0.2.1-rc.2`，所以「跟随 latest」实际永远拿不到新版本。这个包的做法是把最近的版本连同所属 tag 一起列出来（`build/render_wizard.py` 每次构建时查 npm 生成），由安装的人决定。
+
 装完访问 `http://设备IP:3080`，首次进入在设置里填 DeepSeek API Key。
 
 > **首次访问要带启动 token。** dsh web 默认开启浏览器鉴权，直接开端口只会返回 `401 dsh web authentication required`。第一次请从应用「日志」里复制 `首次访问链接（含启动 token）` 那一行（也可读 `/vol1/@appshare/dsh-fnos/entry-url.txt`），打开后浏览器会写入 30 天有效的 HttpOnly cookie，之后就能直接访问端口。每次重启都会生成新 token，旧链接随即失效。
+
+## 换 dsh 版本
+
+装完之后在应用中心「设置」里改「dsh 版本」即可，不用重装：
+
+```
+改版本 → config_callback 就地 npm 换版本（约 30 秒）→ 经应用中心重启 → 状态回到运行中
+```
+
+换版本失败会自动退回原来的版本并写日志；端口改了也会一并重启。日志在 `应用目录/var/info.log`。
 
 ## 为什么不把运行时打进包
 
