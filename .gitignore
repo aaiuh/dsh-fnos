@@ -4,3 +4,4 @@ smoke/
 dist/
 node_modules/
 __pycache__/
+app.tgz

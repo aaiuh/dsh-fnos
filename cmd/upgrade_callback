@@ -24,7 +24,7 @@ say "先停掉旧服务"
 bash "${APPDEST}/cmd/main" stop >/dev/null 2>&1 || true
 
 DSH_VER=""
-for f in "${APPDEST}/VERSION" "${APPDEST}/cmd/VERSION"; do
+for f in "${APPDEST}/VERSION" "${APPDEST}/../VERSION" "${APPDEST}/cmd/VERSION"; do
     [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
 done
 [ -n "${DSH_VER}" ] || { say "ERROR 包内缺 VERSION，放弃升级"; exit 1; }

@@ -4,7 +4,7 @@
         "items": [
             {
                 "type": "text",
-                "field": "wizard_port",
+                "field": "ui_port",
                 "label": "监听端口",
                 "initValue": "3080",
                 "helpText": "DSH Web 的监听端口，装完用 http://设备IP:该端口 访问。",

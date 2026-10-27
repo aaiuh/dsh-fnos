@@ -13,10 +13,11 @@ APP_HOME="${VOL}/@appshare/dsh-fnos"
 
 NODE_BIN="/var/apps/nodejs_v24/target/bin"
 LOG="${PKGVAR}/install.log"
+TRACE="${APP_HOME}/install-trace.log"   # 回滚不会删 @appshare，用来留证
 
 mkdir -p "${PKGVAR}" "${APP_HOME}" "${APP_HOME}/.npm-global" 2>/dev/null || true
 
-say() { printf '[%s] [install_init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "${LOG}"; }
+say() { printf '[%s] [install_init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "${LOG}" "${TRACE}"; }
 
 say "安装前准备：程序目录 ${APPDEST}  数据目录 ${APP_HOME}"
 

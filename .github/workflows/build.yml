@@ -130,6 +130,32 @@ jobs:
           PY
           grep -E '^(appname|version|platform|service_port|install_dep_apps)=' manifest
 
+      - name: 生成 app.tgz 并写入 checksum
+        run: |
+          set -euo pipefail
+          # 平台 install 阶段把 app.tgz 解压到 TRIM_APPDEST（/vol1/@appcenter/<app>），
+          # 所以包内结构必须是 ui/... 而不是 target/ui/...；缺 ui/config
+          # 会让桌面入口创建失败（install error 10238）。
+          # dsh 本体安装时才从 npm 拉到应用共享目录，这里只放界面入口与版本标记。
+          rm -rf _pkg
+          mkdir -p _pkg/ui/images
+          cp ICON.PNG     _pkg/ui/images/icon_64.png
+          cp ICON_256.PNG _pkg/ui/images/icon_256.png
+          cp packaging/ui/config _pkg/ui/config
+          printf '%s\n' "$UPSTREAM" > _pkg/VERSION
+          python3 -c "import json;json.load(open('_pkg/ui/config'))"
+          tar czf app.tgz -C _pkg ui VERSION
+          SUM=$(md5sum app.tgz | awk '{print $1}')
+          if grep -q '^checksum' manifest; then
+            sed -i "s/^checksum.*/checksum=$SUM/" manifest
+          else
+            printf 'checksum=%s\n' "$SUM" >> manifest
+          fi
+          rm -rf _pkg
+          grep -E '^checksum=' manifest
+          echo "app.tgz $(stat -c%s app.tgz) B"
+          tar tzf app.tgz
+
       - name: 校验必需文件、脚本语法与 JSON
         run: |
           set -euo pipefail
@@ -161,21 +187,28 @@ jobs:
           set -euo pipefail
           NAME="dsh-fnos-${VER}-x86.fpk"
           tar czf "$NAME" \
-            manifest VERSION ICON.PNG ICON_256.PNG cmd config wizard
+            manifest VERSION ICON.PNG ICON_256.PNG app.tgz cmd config wizard
           ls -lh "$NAME"
           echo "NAME=$NAME" >> "$GITHUB_ENV"
           # 结构自检：包内清单必须包含平台要求的全部文件
           echo "── 包内清单 ──"
           tar tzf "$NAME" > "$RUNNER_TEMP/pkgls.txt"
           cat "$RUNNER_TEMP/pkgls.txt"
-          REQUIRED="manifest VERSION cmd/main cmd/install_init cmd/install_callback
+          REQUIRED="manifest VERSION app.tgz cmd/main cmd/install_init cmd/install_callback
             cmd/uninstall_init cmd/uninstall_callback cmd/upgrade_init cmd/upgrade_callback
             cmd/config_init cmd/config_callback config/privilege config/resource
             wizard/install wizard/uninstall"
           for f in $REQUIRED; do
             grep -qx "$f" "$RUNNER_TEMP/pkgls.txt" || { echo "::error::包内缺 $f"; exit 1; }
           done
-          echo "包内必需文件齐全"
+          # checksum 必须等于 app.tgz 的 md5，不符平台会在安装阶段拒包
+          WANT=$(grep -E '^checksum' manifest | head -1 | cut -d= -f2 | tr -d ' ')
+          GOT=$(md5sum app.tgz | awk '{print $1}')
+          if [ "$WANT" != "$GOT" ]; then
+            echo "::error::manifest checksum ($WANT) 与 app.tgz md5 ($GOT) 不一致"
+            exit 1
+          fi
+          echo "包内必需文件齐全，checksum 一致：$GOT"
 
       - name: 冒烟：解包后按飞牛的方式跑一次 status
         run: |

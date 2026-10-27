@@ -19,7 +19,8 @@ PKG="@deepseek-ai/dsh"
 mkdir -p "${PKGVAR}" "${APP_HOME}" "${NPM_PREFIX}" 2>/dev/null
 
 LOG="${PKGVAR}/install.log"
-exec > >(tee -a "${LOG}") 2>&1
+TRACE="${APP_HOME}/install-trace.log"   # 回滚不删 @appshare，用来留证
+exec > >(tee -a "${LOG}" "${TRACE}") 2>&1
 
 say() { printf '[%s] [install] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
@@ -30,7 +31,7 @@ if [ ! -x "${NODE_BIN}/node" ]; then
 fi
 
 DSH_VER=""
-for f in "${APPDEST}/VERSION" "${APPDEST}/cmd/VERSION"; do
+for f in "${APPDEST}/VERSION" "${APPDEST}/../VERSION" "${APPDEST}/cmd/VERSION"; do
     [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
 done
 if [ -z "${DSH_VER}" ]; then
