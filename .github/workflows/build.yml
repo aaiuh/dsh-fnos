@@ -130,6 +130,15 @@ jobs:
           PY
           grep -E '^(appname|version|platform|service_port|install_dep_apps)=' manifest
 
+      - name: 渲染向导里的版本选项
+        run: |
+          set -euo pipefail
+          # 上游 dist-tags 不一定跟着发版走，把最近几个版本连同所属 tag 一起列出来让人选
+          python3 build/render_wizard.py --registry "${NPM_REGISTRY:-https://registry.npmmirror.com}" \
+            --keep 5 --default "$UPSTREAM"
+          python3 -c "import json;[json.load(open(f)) for f in ['wizard/install','wizard/config','wizard/uninstall']]"
+          grep -c '"value"' wizard/install
+
       - name: 生成 app.tgz 并写入 checksum
         run: |
           set -euo pipefail
@@ -161,10 +170,10 @@ jobs:
           set -euo pipefail
           # 飞牛应用中心在 checkPackage 阶段按这份清单验包，
           # 缺任一项就报 10111「checkPackage .../cmd/xxx is not exist」，连向导都不弹。
-          REQUIRED="manifest VERSION cmd/main cmd/install_init cmd/install_callback
+          REQUIRED="manifest VERSION app.tgz cmd/main cmd/install_init cmd/install_callback
             cmd/uninstall_init cmd/uninstall_callback cmd/upgrade_init cmd/upgrade_callback
             cmd/config_init cmd/config_callback config/privilege config/resource
-            wizard/install wizard/uninstall"
+            wizard/install wizard/config wizard/uninstall"
           missing=""
           for f in $REQUIRED; do
             [ -f "$f" ] || missing="$missing $f"
@@ -179,7 +188,7 @@ jobs:
           for f in cmd/*; do
             bash -n "$f" || { echo "::error::语法错误 $f"; exit 1; }
           done
-          python3 -c "import json;[json.load(open(f)) for f in ['wizard/install','wizard/uninstall','config/privilege','config/resource']]"
+          python3 -c "import json;[json.load(open(f)) for f in ['wizard/install','wizard/config','wizard/uninstall','config/privilege','config/resource']]"
           echo "脚本与 JSON 校验通过"
 
       - name: 打 fpk
@@ -283,7 +292,7 @@ jobs:
           echo "$UPSTREAM" > upstream.txt
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add manifest VERSION upstream.txt fnpack.json
+          git add manifest VERSION upstream.txt fnpack.json wizard/install wizard/config
           if git diff --cached --quiet; then
             echo "无变化"
             exit 0
