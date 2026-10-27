@@ -1,0 +1,21 @@
+#!/bin/bash
+# 卸载回调：停服务；用户数据（会话、配置、.npm-global）默认保留。
+# 应用中心卸载时若勾了「删除应用数据」，平台会自己清 @appshare 下的共享目录。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+LOG="${PKGVAR}/info.log"
+
+say() { printf '[%s] [uninstall] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${LOG}" 2>/dev/null; }
+
+say "停止服务"
+bash "${APPDEST}/cmd/main" stop >/dev/null 2>&1 || true
+
+# 把还在跑的 dsh 进程收干净，避免占着端口导致重装失败
+for p in $(pgrep -f "dsh.*--profile web" 2>/dev/null); do
+    kill -TERM "${p}" 2>/dev/null || true
+done
+
+say "卸载完成（用户数据保留在 @appshare/dsh-fnos）"
+exit 0
