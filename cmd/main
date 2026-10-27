@@ -21,6 +21,22 @@ DSH_BIN="${NPM_PREFIX}/bin/dsh"
 LOG_FILE="${PKGVAR}/info.log"
 PID_FILE="${PKGVAR}/dsh.pid"
 
+# 向导值：平台若注入环境变量就用注入值；没注入时读安装/设置页持久化的 app.env 兜底
+ENV_FILE="${PKGVAR}/app.env"
+if [ -r "${ENV_FILE}" ]; then
+    _saved_port=""; _saved_host=""; _saved_reg=""
+    while IFS='=' read -r _k _v; do
+        case "${_k}" in
+            wizard_port) _saved_port="${_v}" ;;
+            wizard_host) _saved_host="${_v}" ;;
+            wizard_npm_registry) _saved_reg="${_v}" ;;
+        esac
+    done < "${ENV_FILE}"
+    [ -n "${wizard_port:-}" ] || wizard_port="${_saved_port}"
+    [ -n "${wizard_host+x}" ] || wizard_host="${_saved_host}"
+    [ -n "${wizard_npm_registry:-}" ] || wizard_npm_registry="${_saved_reg}"
+fi
+
 PORT="${wizard_port:-3080}"
 START_WAIT="${DSH_START_WAIT:-90}"
 

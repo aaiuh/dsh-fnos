@@ -1,0 +1,15 @@
+#!/bin/bash
+# 升级前初始化：飞牛应用中心要求本文件存在（缺失会 10111）。
+# 先停服务，避免 npm 覆盖 .npm-global 时有文件被占用。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+
+say() { printf '[%s] [upgrade_init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${PKGVAR}/info.log" 2>/dev/null; }
+
+say "停止服务，准备升级"
+bash "${APPDEST}/cmd/main" stop >/dev/null 2>&1 || true
+
+say "升级前准备完成"
+exit 0

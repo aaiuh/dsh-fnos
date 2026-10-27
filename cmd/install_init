@@ -1,0 +1,30 @@
+#!/bin/bash
+# 安装前初始化：飞牛应用中心在 checkPackage 阶段要求本文件存在，
+# 缺失时报 10111「checkPackage .../cmd/install_init is not exist」，连向导都不弹。
+#
+# 这里只做安装前的准备（建目录、留日志），不做任何可能中断安装的强校验；
+# 依赖项 nodejs_v24 的检查放在 install_callback 里做，那里失败信息更完整。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+VOL="${TRIM_APPDEST_VOL:-/vol1}"
+APP_HOME="${VOL}/@appshare/dsh-fnos"
+
+NODE_BIN="/var/apps/nodejs_v24/target/bin"
+LOG="${PKGVAR}/install.log"
+
+mkdir -p "${PKGVAR}" "${APP_HOME}" "${APP_HOME}/.npm-global" 2>/dev/null || true
+
+say() { printf '[%s] [install_init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "${LOG}"; }
+
+say "安装前准备：程序目录 ${APPDEST}  数据目录 ${APP_HOME}"
+
+if [ -x "${NODE_BIN}/node" ]; then
+    say "依赖运行时已就位：$("${NODE_BIN}/node" -v 2>/dev/null)"
+else
+    say "WARN 暂未找到 Node.js 24 运行时（${NODE_BIN}/node），将在安装回调中再次检查"
+fi
+
+say "安装前准备完成"
+exit 0

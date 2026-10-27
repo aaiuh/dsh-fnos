@@ -130,9 +130,25 @@ jobs:
           PY
           grep -E '^(appname|version|platform|service_port|install_dep_apps)=' manifest
 
-      - name: 校验命令脚本可执行且语法正确
+      - name: 校验必需文件、脚本语法与 JSON
         run: |
           set -euo pipefail
+          # 飞牛应用中心在 checkPackage 阶段按这份清单验包，
+          # 缺任一项就报 10111「checkPackage .../cmd/xxx is not exist」，连向导都不弹。
+          REQUIRED="manifest VERSION cmd/main cmd/install_init cmd/install_callback
+            cmd/uninstall_init cmd/uninstall_callback cmd/upgrade_init cmd/upgrade_callback
+            cmd/config_init cmd/config_callback config/privilege config/resource
+            wizard/install wizard/uninstall"
+          missing=""
+          for f in $REQUIRED; do
+            [ -f "$f" ] || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::缺少飞牛应用中心要求的文件:$missing"
+            exit 1
+          fi
+          echo "必需文件齐全（$(echo $REQUIRED | wc -w) 项）"
+
           chmod +x cmd/*
           for f in cmd/*; do
             bash -n "$f" || { echo "::error::语法错误 $f"; exit 1; }
@@ -148,9 +164,18 @@ jobs:
             manifest VERSION ICON.PNG ICON_256.PNG cmd config wizard
           ls -lh "$NAME"
           echo "NAME=$NAME" >> "$GITHUB_ENV"
-          # 结构自检
+          # 结构自检：包内清单必须包含平台要求的全部文件
           echo "── 包内清单 ──"
-          tar tzf "$NAME"
+          tar tzf "$NAME" > "$RUNNER_TEMP/pkgls.txt"
+          cat "$RUNNER_TEMP/pkgls.txt"
+          REQUIRED="manifest VERSION cmd/main cmd/install_init cmd/install_callback
+            cmd/uninstall_init cmd/uninstall_callback cmd/upgrade_init cmd/upgrade_callback
+            cmd/config_init cmd/config_callback config/privilege config/resource
+            wizard/install wizard/uninstall"
+          for f in $REQUIRED; do
+            grep -qx "$f" "$RUNNER_TEMP/pkgls.txt" || { echo "::error::包内缺 $f"; exit 1; }
+          done
+          echo "包内必需文件齐全"
 
       - name: 冒烟：解包后按飞牛的方式跑一次 status
         run: |
@@ -158,6 +183,13 @@ jobs:
           FAKE="$PWD/fake"
           mkdir -p "$FAKE/appdest" "$FAKE/pkgvar" "$FAKE/vol/@appshare/dsh-fnos"
           tar xzf "$NAME" -C "$FAKE/appdest"
+
+          # 各生命周期脚本必须能独立跑通（平台会逐个调用，任一崩都算安装失败）
+          for s in install_init config_init config_callback uninstall_init upgrade_init; do
+            TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" TRIM_APPDEST_VOL="$FAKE/vol" \
+              bash "$FAKE/appdest/cmd/$s" || { echo "::error::$s 执行失败"; exit 1; }
+            echo "  $s 退出码 0"
+          done
 
           # 没装 dsh 时 start 必须明确失败（而不是静默报成功）
           if TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" \

@@ -69,6 +69,9 @@ fi
 # 记下这次装的版本，升级时用来判断是否需要重装
 "${DSH_BIN}" --version > "${APP_HOME}/.installed-version" 2>/dev/null || true
 
+# 把安装向导里填的端口/地址/源落盘，cmd/main start 时不必依赖平台重新注入
+bash "${APPDEST}/cmd/config_callback" >/dev/null 2>&1 || true
+
 say "完成：$(${DSH_BIN} --version 2>/dev/null || echo '版本未知')"
 say "占用：$(du -sh "${NPM_PREFIX}" 2>/dev/null | cut -f1)"
 exit 0
