@@ -19,13 +19,13 @@ old_of() {
     awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}"
 }
 
-PORT="${wizard_port:-$(old_of wizard_port)}"
+PORT="${ui_port:-${wizard_port:-$(old_of ui_port)}}"
 HOST="${wizard_host-$(old_of wizard_host)}"
 REG="${wizard_npm_registry:-$(old_of wizard_npm_registry)}"
 
 TMP="${ENV_FILE}.tmp.$$"
 {
-    [ -n "${PORT}" ] && printf 'wizard_port=%s\n' "${PORT}"
+    [ -n "${PORT}" ] && printf 'ui_port=%s\n' "${PORT}"
     printf 'wizard_host=%s\n' "${HOST}"
     [ -n "${REG}" ] && printf 'wizard_npm_registry=%s\n' "${REG}"
 } > "${TMP}" 2>/dev/null && mv -f "${TMP}" "${ENV_FILE}" 2>/dev/null || {

@@ -27,17 +27,17 @@ if [ -r "${ENV_FILE}" ]; then
     _saved_port=""; _saved_host=""; _saved_reg=""
     while IFS='=' read -r _k _v; do
         case "${_k}" in
-            wizard_port) _saved_port="${_v}" ;;
+            ui_port|wizard_port) _saved_port="${_v}" ;;
             wizard_host) _saved_host="${_v}" ;;
             wizard_npm_registry) _saved_reg="${_v}" ;;
         esac
     done < "${ENV_FILE}"
-    [ -n "${wizard_port:-}" ] || wizard_port="${_saved_port}"
+    [ -n "${ui_port:-}" ] || ui_port="${_saved_port}"
     [ -n "${wizard_host+x}" ] || wizard_host="${_saved_host}"
     [ -n "${wizard_npm_registry:-}" ] || wizard_npm_registry="${_saved_reg}"
 fi
 
-PORT="${wizard_port:-3080}"
+PORT="${ui_port:-${wizard_port:-3080}}"
 START_WAIT="${DSH_START_WAIT:-90}"
 
 mkdir -p "${PKGVAR}" "${APP_HOME}" 2>/dev/null
@@ -129,6 +129,14 @@ start_app() {
     while [ "${i}" -lt "${START_WAIT}" ]; do
         if port_listening; then
             log_info "启动成功，端口 ${PORT} 就绪（${i}s）"
+            # dsh 每次启动生成一次性 token 换 cookie；把带 token 的链接落盘，
+            # 否则首次打开只会看到 401「authentication required」
+            local url
+            url=$(grep -oE "http://[^ ]+\?token=[A-Za-z0-9_-]+" "${PKGVAR}/dsh.log" 2>/dev/null | tail -1)
+            if [ -n "${url}" ]; then
+                printf '%s\n' "${url}" > "${APP_HOME}/entry-url.txt" 2>/dev/null || true
+                log_info "首次访问链接（含启动 token，浏览器会记住登录态，之后可直接访问端口）：${url}"
+            fi
             return 0
         fi
         if ! pid_alive "${pid}"; then
