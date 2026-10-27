@@ -158,14 +158,29 @@ jobs:
           FAKE="$PWD/fake"
           mkdir -p "$FAKE/appdest" "$FAKE/pkgvar" "$FAKE/vol/@appshare/dsh-fnos"
           tar xzf "$NAME" -C "$FAKE/appdest"
-          # 没装 dsh 时 start 必须明确失败（而不是静默成功）
-          TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" \
-            TRIM_APPDEST_VOL="$FAKE/vol" \
-            bash "$FAKE/appdest/cmd/main" start && { echo "::error::缺 dsh 时不应启动成功"; exit 1; } || true
+
+          # 没装 dsh 时 start 必须明确失败（而不是静默报成功）
+          if TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" \
+               TRIM_APPDEST_VOL="$FAKE/vol" \
+               bash "$FAKE/appdest/cmd/main" start; then
+            echo "::error::缺 dsh 时不应启动成功"
+            exit 1
+          fi
           echo "── 缺依赖时按预期报错 ──"
-          tail -5 "$FAKE/pkgvar/info.log" || true
+          tail -3 "$FAKE/pkgvar/info.log" || true
+
+          # status 在未运行时返回 3，这是约定值，不能当成步骤失败
+          set +e
           TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" \
-            bash "$FAKE/appdest/cmd/main" status; RC=$?; echo "status 退出码 $RC（3 = 未运行，符合预期）"
+            bash "$FAKE/appdest/cmd/main" status
+          RC=$?
+          set -e
+          echo "status 退出码 $RC"
+          if [ "$RC" != "3" ]; then
+            echo "::error::未运行时 status 应返回 3，实际 $RC"
+            exit 1
+          fi
+          echo "冒烟通过"
 
       - name: 发 Release
         env:
