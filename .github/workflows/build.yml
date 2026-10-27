@@ -221,7 +221,17 @@ jobs:
           git add manifest VERSION upstream.txt fnpack.json
           if git diff --cached --quiet; then
             echo "无变化"
-          else
-            git commit -m "chore: 跟随上游 dsh ${UPSTREAM}（包 ${VER}）"
-            git push
+            exit 0
           fi
+          git commit -m "chore: 跟随上游 dsh ${UPSTREAM}（包 ${VER}）"
+          # 期间可能有别的 run 推过东西，先 rebase 再推，避免 non-fast-forward
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "已推送"; exit 0
+            fi
+            echo "第 ${attempt} 次推送失败，尝试 rebase 后重试"
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; echo "::error::rebase 冲突"; exit 1; }
+          done
+          echo "::error::三次重试仍推送失败"
+          exit 1
