@@ -1,0 +1,212 @@
+name: 构建 dsh 飞牛原生包
+
+# 跟随上游 npm 发布：每 6 小时查一次 @deepseek-ai/dsh 的 latest，
+# 与 upstream.txt 记录的版本比对，变了就重新打包并发 Release。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "强制指定 dsh 版本（留空 = npm latest，例如 0.2.1-rc.3）"
+        required: false
+      force:
+        description: "同版本也强制重建"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "23 */6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "manifest"
+      - "cmd/**"
+      - "wizard/**"
+      - "config/**"
+      - "build/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dsh-build
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: 取上游版本
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      upstream: ${{ steps.pick.outputs.upstream }}
+      needed: ${{ steps.pick.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: 决定要构建的版本
+        id: pick
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            UP="${{ inputs.version }}"
+          else
+            UP="$(npm view @deepseek-ai/dsh version --registry=https://registry.npmjs.org 2>/dev/null)"
+          fi
+          [ -n "$UP" ] || { echo "::error::取不到上游版本"; exit 1; }
+
+          CURRENT="$(head -n1 upstream.txt 2>/dev/null | tr -d '[:space:]' || true)"
+          echo "上游版本：$UP   仓库记录：${CURRENT:-（无）}"
+
+          # fpk 版本只用数字：上游 0.2.1-rc.2 -> 主版本 0.2.1，打包修订号单独加
+          BASE="${UP%%-*}"
+
+          VER=$(python3 - "$BASE" <<'PY'
+          import json, os, re, sys
+          base = sys.argv[1]
+          published = {}
+          if os.path.exists("fnpack.json"):
+              try:
+                  published = json.load(open("fnpack.json"))["apps"]["dsh-fnos"]["releases"]
+              except Exception:
+                  published = {}
+          # 同主版本下已发布的最大修订号
+          rev = 0
+          for v in published:
+              m = re.fullmatch(re.escape(base) + r"-(\d+)", v)
+              if m:
+                  rev = max(rev, int(m.group(1)))
+          print(f"{base}-{rev + 1}")
+          PY
+          )
+          echo "包版本：$VER"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "upstream=$UP" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$UP" = "$CURRENT" ] && [ "${{ github.event_name }}" != "push" ]; then
+            echo "上游没变，跳过"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: 打包并发布
+    needs: resolve
+    if: needs.resolve.outputs.needed == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      VER: ${{ needs.resolve.outputs.version }}
+      UPSTREAM: ${{ needs.resolve.outputs.upstream }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 写入上游版本号（安装时据此从 npm 拉包）
+        run: |
+          set -euo pipefail
+          echo "$UPSTREAM" > VERSION
+          echo "VERSION = $UPSTREAM"
+
+      - name: 更新 manifest 里的版本与 changelog
+        run: |
+          set -euo pipefail
+          python3 - "$VER" "$UPSTREAM" <<'PY'
+          import re, sys, datetime
+          ver, up = sys.argv[1], sys.argv[2]
+          p = "manifest"
+          t = open(p, encoding="utf-8").read()
+          t = re.sub(r"^version=.*$", f"version={ver}", t, flags=re.M)
+          cl = (f"跟随上游 dsh {up}。本包复用系统 nodejs_v24 运行时，安装时从 npm 拉取 dsh 本体。")
+          t = re.sub(r"^changelog=.*$", "changelog=" + cl, t, flags=re.M)
+          open(p, "w", encoding="utf-8").write(t)
+          print(t.split("changelog=")[0][:200])
+          PY
+          grep -E '^(appname|version|platform|service_port|install_dep_apps)=' manifest
+
+      - name: 校验命令脚本可执行且语法正确
+        run: |
+          set -euo pipefail
+          chmod +x cmd/*
+          for f in cmd/*; do
+            bash -n "$f" || { echo "::error::语法错误 $f"; exit 1; }
+          done
+          python3 -c "import json;[json.load(open(f)) for f in ['wizard/install','wizard/uninstall','config/privilege','config/resource']]"
+          echo "脚本与 JSON 校验通过"
+
+      - name: 打 fpk
+        run: |
+          set -euo pipefail
+          NAME="dsh-fnos-${VER}-x86.fpk"
+          tar czf "$NAME" \
+            manifest VERSION ICON.PNG ICON_256.PNG cmd config wizard
+          ls -lh "$NAME"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          # 结构自检
+          echo "── 包内清单 ──"
+          tar tzf "$NAME"
+
+      - name: 冒烟：解包后按飞牛的方式跑一次 status
+        run: |
+          set -euo pipefail
+          FAKE="$PWD/fake"
+          mkdir -p "$FAKE/appdest" "$FAKE/pkgvar" "$FAKE/vol/@appshare/dsh-fnos"
+          tar xzf "$NAME" -C "$FAKE/appdest"
+          # 没装 dsh 时 start 必须明确失败（而不是静默成功）
+          TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" \
+            TRIM_APPDEST_VOL="$FAKE/vol" \
+            bash "$FAKE/appdest/cmd/main" start && { echo "::error::缺 dsh 时不应启动成功"; exit 1; } || true
+          echo "── 缺依赖时按预期报错 ──"
+          tail -5 "$FAKE/pkgvar/info.log" || true
+          TRIM_APPDEST="$FAKE/appdest" TRIM_PKGVAR="$FAKE/pkgvar" \
+            bash "$FAKE/appdest/cmd/main" status; RC=$?; echo "status 退出码 $RC（3 = 未运行，符合预期）"
+
+      - name: 发 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v${VER}"
+          {
+            echo "DeepSeek Harness（dsh）飞牛 fnOS 原生封装。"
+            echo
+            echo "- 上游版本：\`${UPSTREAM}\`（npm @deepseek-ai/dsh）"
+            echo "- 复用系统 **Node.js 24** 应用，不打 Node 运行时、不用 Docker"
+            echo "- 安装时从 npm 拉取 dsh 本体（向导可选国内镜像），装完约 900 MB"
+            echo "- 会话与配置在应用共享目录 \`dsh-fnos\`，升级与卸载都保留"
+            echo
+            echo "安装后访问 \`http://设备IP:3080\`，首次在设置里填 DeepSeek API Key。"
+          } > "$RUNNER_TEMP/notes.md"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$NAME" --clobber
+          else
+            gh release create "$TAG" --title "dsh ${VER}（上游 ${UPSTREAM}）" \
+              --notes-file "$RUNNER_TEMP/notes.md" "$NAME"
+          fi
+
+      - name: 登记 fnpack.json
+        run: |
+          set -euo pipefail
+          python3 build/publish.py "$VER" "$NAME" "$UPSTREAM" \
+            "跟随上游 dsh ${UPSTREAM}。"
+          head -50 fnpack.json
+
+      - name: 提交上游版本与索引
+        run: |
+          set -euo pipefail
+          echo "$UPSTREAM" > upstream.txt
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest VERSION upstream.txt fnpack.json
+          if git diff --cached --quiet; then
+            echo "无变化"
+          else
+            git commit -m "chore: 跟随上游 dsh ${UPSTREAM}（包 ${VER}）"
+            git push
+          fi
