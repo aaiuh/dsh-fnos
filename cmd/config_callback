@@ -1,0 +1,38 @@
+#!/bin/bash
+# 配置回调：飞牛应用中心要求本文件存在（缺失会 10111）。
+#
+# 把安装向导 / 设置页里的三项值持久化到 PKGVAR/app.env，
+# 让 cmd/main 在 start 时不必依赖平台是否还在注入向导环境变量。
+# 空值不覆盖旧值；但 wizard_host 被显式清空时表示「自动探测」，要写入空值。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+ENV_FILE="${PKGVAR}/app.env"
+
+mkdir -p "${PKGVAR}" 2>/dev/null || true
+
+say() { printf '[%s] [config_callback] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${PKGVAR}/info.log" 2>/dev/null; }
+
+old_of() {
+    [ -r "${ENV_FILE}" ] || return 0
+    awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "${ENV_FILE}"
+}
+
+PORT="${wizard_port:-$(old_of wizard_port)}"
+HOST="${wizard_host-$(old_of wizard_host)}"
+REG="${wizard_npm_registry:-$(old_of wizard_npm_registry)}"
+
+TMP="${ENV_FILE}.tmp.$$"
+{
+    [ -n "${PORT}" ] && printf 'wizard_port=%s\n' "${PORT}"
+    printf 'wizard_host=%s\n' "${HOST}"
+    [ -n "${REG}" ] && printf 'wizard_npm_registry=%s\n' "${REG}"
+} > "${TMP}" 2>/dev/null && mv -f "${TMP}" "${ENV_FILE}" 2>/dev/null || {
+    rm -f "${TMP}" 2>/dev/null
+    say "WARN 写入 ${ENV_FILE} 失败，本次设置仅在当前流程生效"
+    exit 0
+}
+
+say "已保存：端口 ${PORT:-3080}  地址 ${HOST:-自动}  源 ${REG:-默认}"
+exit 0
