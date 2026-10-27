@@ -1,0 +1,74 @@
+#!/bin/bash
+# 安装回调：把 dsh 本体从 npm 装到应用共享目录。
+#
+# 本包不打 Node 运行时（依赖系统 nodejs_v24），也不把 836 MB 的依赖树塞进 fpk，
+# 所以真正的「安装」发生在这一步：从 npm 拉取与包版本对应的 dsh。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+VOL="${TRIM_APPDEST_VOL:-/vol1}"
+APP_HOME="${VOL}/@appshare/dsh-fnos"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+
+NODE_BIN="/var/apps/nodejs_v24/target/bin"
+NPM_PREFIX="${APP_HOME}/.npm-global"
+
+REGISTRY="${wizard_npm_registry:-https://registry.npmmirror.com}"
+PKG="@deepseek-ai/dsh"
+
+mkdir -p "${PKGVAR}" "${APP_HOME}" "${NPM_PREFIX}" 2>/dev/null
+
+LOG="${PKGVAR}/install.log"
+exec > >(tee -a "${LOG}") 2>&1
+
+say() { printf '[%s] [install] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+if [ ! -x "${NODE_BIN}/node" ]; then
+    say "ERROR 找不到系统 Node.js 运行时：${NODE_BIN}/node"
+    say "ERROR 本应用依赖「Node.js 24」应用（nodejs_v24），请先在应用中心装好它"
+    exit 1
+fi
+
+DSH_VER=""
+for f in "${APPDEST}/VERSION" "${APPDEST}/cmd/VERSION"; do
+    [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
+done
+if [ -z "${DSH_VER}" ]; then
+    say "ERROR 包内缺 VERSION 文件，无法确定要安装的 dsh 版本"
+    exit 1
+fi
+
+export PATH="${NODE_BIN}:${PATH}"
+export HOME="${APP_HOME}"
+export DSH_HOME="${APP_HOME}"
+export NPM_CONFIG_PREFIX="${NPM_PREFIX}"
+export NPM_CONFIG_CACHE="${APP_HOME}/.npm-cache"
+
+say "node  $(node -v)   npm $(npm -v)"
+say "安装 ${PKG}@${DSH_VER}"
+say "npm 源 ${REGISTRY}"
+say "安装位置 ${NPM_PREFIX}"
+
+# 保留旧版本痕迹，方便失败时排查；成功后由下次安装覆盖
+if ! npm install -g "${PKG}@${DSH_VER}" \
+        --prefix "${NPM_PREFIX}" \
+        --registry "${REGISTRY}" \
+        --no-audit --no-fund --loglevel=info; then
+    say "ERROR npm 安装失败"
+    say "ERROR 常见原因：npm 源不可达、磁盘不足、Node 版本过低"
+    df -h "${VOL}" 2>/dev/null | while read -r l; do say "  ${l}"; done
+    exit 1
+fi
+
+DSH_BIN="${NPM_PREFIX}/bin/dsh"
+if [ ! -x "${DSH_BIN}" ]; then
+    say "ERROR 装完却找不到 ${DSH_BIN}"
+    exit 1
+fi
+
+# 记下这次装的版本，升级时用来判断是否需要重装
+"${DSH_BIN}" --version > "${APP_HOME}/.installed-version" 2>/dev/null || true
+
+say "完成：$(${DSH_BIN} --version 2>/dev/null || echo '版本未知')"
+say "占用：$(du -sh "${NPM_PREFIX}" 2>/dev/null | cut -f1)"
+exit 0
