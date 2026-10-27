@@ -1,0 +1,145 @@
+#!/bin/bash
+# DeepSeek Harness (dsh-fnos) 生命周期管理
+#   start  = 后台拉起 dsh web，等到端口就绪才算成功
+#   stop   = 杀进程组并释放端口
+#   status = PID 存活且端口在听 -> 0；否则 -> 3
+#   restart = stop + start
+#
+# dsh 的 --host 只接受具体地址（拒绝 0.0.0.0），所以默认取本机主网卡 IP；
+# 用户也可以在安装向导里指定。
+set -uo pipefail
+
+APPDEST="${TRIM_APPDEST:-/var/apps/dsh-fnos}"
+PKGVAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+VOL="${TRIM_APPDEST_VOL:-/vol1}"
+APP_HOME="${VOL}/@appshare/dsh-fnos"
+
+NODE_BIN="/var/apps/nodejs_v24/target/bin"
+NPM_PREFIX="${APP_HOME}/.npm-global"
+DSH_BIN="${NPM_PREFIX}/bin/dsh"
+
+LOG_FILE="${PKGVAR}/info.log"
+PID_FILE="${PKGVAR}/dsh.pid"
+
+PORT="${wizard_port:-3080}"
+START_WAIT="${DSH_START_WAIT:-90}"
+
+mkdir -p "${PKGVAR}" "${APP_HOME}" 2>/dev/null
+
+log_msg() { printf '%s - [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${1}" "${2}" >> "${LOG_FILE}"; }
+log_info() { log_msg INFO "$*"; }
+log_error() { log_msg ERROR "$*"; }
+
+# 主网卡 IP：dsh 拒绝通配地址，必须给一个具体地址
+detect_host() {
+    local h=""
+    if [ -n "${wizard_host:-}" ]; then
+        h="${wizard_host}"
+    else
+        h=$(ip -4 route get 1.1.1.1 2>/dev/null \
+            | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+        [ -n "${h}" ] || h=$(hostname -I 2>/dev/null | awk '{print $1}')
+        [ -n "${h}" ] || h="127.0.0.1"
+    fi
+    printf '%s' "${h}"
+}
+
+pid_alive() {
+    local pid="${1:-}"
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+    # 僵尸进程不算活着
+    [ "$(awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null)" = "Z" ] && return 1
+    return 0
+}
+
+port_listening() {
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PORT}$"
+}
+
+stop_app() {
+    local pid=""
+    [ -r "${PID_FILE}" ] && pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    if pid_alive "${pid}"; then
+        log_info "停止 dsh（pid ${pid}）"
+        kill -TERM "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+        local i=0
+        while pid_alive "${pid}" && [ "${i}" -lt 15 ]; do sleep 1; i=$((i + 1)); done
+        pid_alive "${pid}" && kill -KILL "-${pid}" 2>/dev/null || true
+    fi
+    # 收尸：端口上残留的 dsh 进程（上次异常退出留下的孤儿）
+    for p in $(pgrep -f "dsh.*--profile web" 2>/dev/null); do
+        [ "${p}" = "${pid}" ] && continue
+        kill -TERM "${p}" 2>/dev/null || true
+    done
+    rm -f "${PID_FILE}"
+    log_info "已停止"
+}
+
+start_app() {
+    if [ ! -x "${DSH_BIN}" ]; then
+        log_error "找不到 dsh 可执行文件：${DSH_BIN}（安装未完成？）"
+        return 1
+    fi
+    if port_listening; then
+        log_info "端口 ${PORT} 已在监听，视为运行中"
+        return 0
+    fi
+
+    local host
+    host=$(detect_host)
+    log_info "启动 dsh web  host=${host}  port=${PORT}"
+
+    export PATH="${NODE_BIN}:${NPM_PREFIX}/bin:${PATH}"
+    export HOME="${APP_HOME}"
+    export DSH_HOME="${APP_HOME}"
+    export NPM_CONFIG_PREFIX="${NPM_PREFIX}"
+    export NPM_CONFIG_CACHE="${APP_HOME}/.npm-cache"
+    export LANG="${LANG:-C.UTF-8}"
+
+    # setsid 让它成为一个独立进程组，stop 时能整组带走
+    setsid "${DSH_BIN}" web \
+        --host "${host}" \
+        --port "${PORT}" \
+        --no-open \
+        --trusted-host "${host}:${PORT}" \
+        --trusted-host "${host}" \
+        >> "${PKGVAR}/dsh.log" 2>&1 &
+    local pid=$!
+    echo "${pid}" > "${PID_FILE}"
+    log_info "已拉起 pid=${pid}，等待端口就绪（最多 ${START_WAIT}s）"
+
+    local i=0
+    while [ "${i}" -lt "${START_WAIT}" ]; do
+        if port_listening; then
+            log_info "启动成功，端口 ${PORT} 就绪（${i}s）"
+            return 0
+        fi
+        if ! pid_alive "${pid}"; then
+            log_error "dsh 进程已退出，最近的日志："
+            tail -n 25 "${PKGVAR}/dsh.log" 2>/dev/null | while read -r l; do log_error "  ${l}"; done
+            rm -f "${PID_FILE}"
+            return 1
+        fi
+        sleep 1; i=$((i + 1))
+    done
+
+    log_error "等待 ${START_WAIT}s 端口仍未就绪，判为失败"
+    tail -n 25 "${PKGVAR}/dsh.log" 2>/dev/null | while read -r l; do log_error "  ${l}"; done
+    return 1
+}
+
+case "${1:-}" in
+    start)   start_app ;;
+    stop)    stop_app ;;
+    restart) stop_app; sleep 1; start_app ;;
+    status)
+        pid=""
+        [ -r "${PID_FILE}" ] && pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if pid_alive "${pid}" || port_listening; then exit 0; else exit 3; fi
+        ;;
+    *)
+        echo "usage: $0 {start|stop|restart|status}" >&2
+        exit 1
+        ;;
+esac
