@@ -1,0 +1,47 @@
+{
+  "schema_version": "2",
+  "source_info": {
+    "name": "aaiuh飞牛应用源",
+    "author": "aaiuh",
+    "homepage": "https://github.com/aaiuh/fnos-apps",
+    "description": "飞牛 fnOS 原生应用集合。免费开源，跟随各应用上游更新。"
+  },
+  "apps": {
+    "dsh-fnos": {
+      "display_name": "DeepSeek Harness",
+      "desc": "DeepSeek AI 开源的插件化智能体框架（命令行 dsh）。本包是飞牛 fnOS 原生封装：复用系统已装的 Node.js 24 运行时，安装时从 npm 拉取 dsh 本体，不打包 Node、不使用 Docker。<br/><br/><strong>安装后使用：</strong><br/>等应用中心显示「运行中」，浏览器打开 http://设备IP:3080 进入 DSH Web，首次使用在设置里填 DeepSeek API Key。<br/><br/><strong>说明：</strong><br/>1. 安装过程需要访问 npm 源，安装向导里可选国内镜像，装完约占用 900 MB 磁盘。<br/>2. 会话与配置保存在应用共享目录 dsh-fnos 下，升级与卸载都会保留。<br/>3. 由 GitHub Actions 跟随上游 npm 版本自动打包，升级走应用中心正常流程。",
+      "platform": [
+        "x86"
+      ],
+      "categories": [
+        "AI赋能"
+      ],
+      "icon_url": "https://raw.githubusercontent.com/aaiuh/dsh-fnos/main/ICON_256.PNG",
+      "preview_urls": [],
+      "readme_url": "https://raw.githubusercontent.com/aaiuh/dsh-fnos/main/README.md",
+      "bug_report_url": "https://github.com/aaiuh/dsh-fnos/issues",
+      "maintainer": "DeepSeek AI",
+      "maintainer_url": "https://github.com/deepseek-ai/deepseek-harness",
+      "distributor": "aaiuh",
+      "distributor_url": "https://github.com/aaiuh/dsh-fnos",
+      "run_as": "package",
+      "install_type": "",
+      "is_docker": false,
+      "service_port": "3080",
+      "releases": {
+        "0.2.1-1": {
+          "changelog": "跟随上游 dsh 0.2.1-rc.2。\n\n上游 dsh 0.2.1-rc.2。",
+          "updated_at": "2026-10-27",
+          "os_min_version": "1.1.3100",
+          "packages": {
+            "x86": {
+              "download_url": "https://github.com/aaiuh/dsh-fnos/releases/download/v0.2.1-1/dsh-fnos-0.2.1-1-x86.fpk",
+              "sha256": "cb0ad58cb270db6cb0eaba985a5189916fb7050b0718e78cfa51668784a0176d",
+              "size": 19562
+            }
+          }
+        }
+      }
+    }
+  }
+}
