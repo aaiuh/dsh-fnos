@@ -16,6 +16,8 @@
 
 装完访问 `http://设备IP:3080`，首次进入在设置里填 DeepSeek API Key。
 
+> **首次访问要带启动 token。** dsh web 默认开启浏览器鉴权，直接开端口只会返回 `401 dsh web authentication required`。第一次请从应用「日志」里复制 `首次访问链接（含启动 token）` 那一行（也可读 `/vol1/@appshare/dsh-fnos/entry-url.txt`），打开后浏览器会写入 30 天有效的 HttpOnly cookie，之后就能直接访问端口。每次重启都会生成新 token，旧链接随即失效。
+
 ## 为什么不把运行时打进包
 
 `@deepseek-ai/dsh` 装完是 **836 MB / 194 个顶层包 / 306 个 `@deepseek-ai` 子包**。塞进 fpk 会让包变成两百多兆，而且每次上游发版都要重传。
