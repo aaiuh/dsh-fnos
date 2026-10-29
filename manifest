@@ -1,8 +1,8 @@
 appname=dsh-fnos
-version=0.2.1-5
+version=0.2.1-6
 display_name=DeepSeek Harness
 desc=DeepSeek AI 开源的插件化智能体框架（命令行 dsh）。本包是飞牛 fnOS 原生封装：复用系统已装的 Node.js 24 运行时，安装时从 npm 拉取 dsh 本体，不打包 Node、不使用 Docker。<br/><br/><strong>安装后使用：</strong><br/>1. 等应用中心显示「运行中」；<br/>2. 打开应用「日志」，复制里面「首次访问链接（含启动 token）」那一行到浏览器打开（dsh 默认要求带启动 token 换 cookie，直接访问端口会返回 401）；<br/>3. 打开后在设置里填 DeepSeek API Key。浏览器会记住登录态，之后可直接访问 http://设备IP:端口。<br/><br/><strong>说明：</strong><br/>1. 安装过程需要访问 npm 源，安装向导里可选国内镜像，装完约占用 900 MB 磁盘。<br/>2. 会话与配置保存在应用共享目录 dsh-fnos 下，升级与卸载都会保留；本次启动的带 token 链接保存在该目录的 entry-url.txt。<br/>3. 由 GitHub Actions 跟随上游 npm 版本自动打包，升级走应用中心正常流程。
-changelog=跟随上游 dsh 0.2.1-rc.2。本包复用系统 nodejs_v24 运行时，安装时从 npm 拉取 dsh 本体。
+changelog=跟随上游 dsh 0.2.1-rc.5。本包复用系统 nodejs_v24 运行时，安装时从 npm 拉取 dsh 本体。
 platform=x86
 source=thirdparty
 maintainer=DeepSeek AI
@@ -17,4 +17,4 @@ ctl_stop=true
 os_min_version=1.1.3100
 desktop_uidir=ui
 desktop_applaunchname=dsh-fnos.Application
-checksum=f3e3fa7673d7ae19235a1bde3da932b4
+checksum=74ec710c839d7cbd7207eb4248a48346
