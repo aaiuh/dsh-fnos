@@ -19,8 +19,10 @@ on:
     paths:
       - "manifest"
       - "cmd/**"
+      - "shim/**"
       - "wizard/**"
       - "config/**"
+      - "packaging/**"
       - "build/**"
       - ".github/workflows/build.yml"
 
@@ -50,6 +52,10 @@ jobs:
         id: pick
         run: |
           set -euo pipefail
+          # 已发 Release 的 tag 列表，交给版本计算避免回落
+          RELEASED_JSON=$(curl -sS -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" 2>/dev/null || echo '[]')
+          export RELEASED_JSON
           if [ -n "${{ inputs.version }}" ]; then
             UP="${{ inputs.version }}"
           else
@@ -63,16 +69,36 @@ jobs:
           # fpk 版本只用数字：上游 0.2.1-rc.2 -> 主版本 0.2.1，打包修订号单独加
           BASE="${UP%%-*}"
 
-          VER=$(python3 - "$BASE" <<'PY'
+          VER=$(RELEASED_JSON="$RELEASED_JSON" python3 - "$BASE" <<'PY'
           import json, os, re, sys
           base = sys.argv[1]
-          published = {}
+
+          def key(v):
+              m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-(\d+))?", (v or "").strip())
+              return tuple(int(x) for x in m.groups(default="0")) if m else (0, 0, 0, 0)
+
+          published = []
           if os.path.exists("fnpack.json"):
               try:
-                  published = json.load(open("fnpack.json"))["apps"]["dsh-fnos"]["releases"]
+                  published = list(json.load(open("fnpack.json"))["apps"]["dsh-fnos"]["releases"])
               except Exception:
-                  published = {}
-          # 同主版本下已发布的最大修订号
+                  pass
+
+          # GitHub 上已发的 Release 也纳入：手工发过的版本不能漏，否则版本号会回落，
+          # 应用中心按「不比已装版本大」判无更新，等于白发。
+          try:
+              released = json.loads(os.environ.get("RELEASED_JSON") or "[]")
+              published += [str(r.get("tag_name", "")).lstrip("v") for r in released]
+          except Exception:
+              pass
+
+          published = [p for p in published if p]
+          if published:
+              top = max(published, key=key)
+              if key(top)[:3] > key(base)[:3]:
+                  base = ".".join(str(x) for x in key(top)[:3])
+                  print(f"已发布最高版本 {top} 高于上游主版本，按 {base} 继续", file=sys.stderr)
+
           rev = 0
           for v in published:
               m = re.fullmatch(re.escape(base) + r"-(\d+)", v)
@@ -147,13 +173,17 @@ jobs:
           # 会让桌面入口创建失败（install error 10238）。
           # dsh 本体安装时才从 npm 拉到应用共享目录，这里只放界面入口与版本标记。
           rm -rf _pkg
-          mkdir -p _pkg/ui/images
+          mkdir -p _pkg/ui/images _pkg/shim
           cp ICON.PNG     _pkg/ui/images/icon_64.png
           cp ICON_256.PNG _pkg/ui/images/icon_256.png
           cp packaging/ui/config _pkg/ui/config
+          # 网关适配层必须打进 app.tgz：平台只把这个包解到 @appcenter/<app>/，
+          # 放 fpk 根会被平台自己消费掉，应用启动时找不到脚本、桌面入口 502。
+          cp shim/gateway_shim.py _pkg/shim/gateway_shim.py
           printf '%s\n' "$UPSTREAM" > _pkg/VERSION
           python3 -c "import json;json.load(open('_pkg/ui/config'))"
-          tar czf app.tgz -C _pkg ui VERSION
+          python3 -c "import ast;ast.parse(open('_pkg/shim/gateway_shim.py').read())"
+          tar czf app.tgz -C _pkg ui VERSION shim
           SUM=$(md5sum app.tgz | awk '{print $1}')
           if grep -q '^checksum' manifest; then
             sed -i "s/^checksum.*/checksum=$SUM/" manifest
@@ -218,6 +248,28 @@ jobs:
             exit 1
           fi
           echo "包内必需文件齐全，checksum 一致：$GOT"
+
+      - name: 冒烟：确认 app.tgz 里带了网关适配层
+        run: |
+          set -euo pipefail
+          tar xzOf "$NAME" app.tgz > "$RUNNER_TEMP/app.tgz"
+          tar tzf "$RUNNER_TEMP/app.tgz" > "$RUNNER_TEMP/appls.txt"
+          cat "$RUNNER_TEMP/appls.txt"
+          grep -qx "shim/gateway_shim.py" "$RUNNER_TEMP/appls.txt" \
+            || { echo "::error::app.tgz 缺 shim/gateway_shim.py，装完桌面入口会 502"; exit 1; }
+          grep -qx "ui/config" "$RUNNER_TEMP/appls.txt" \
+            || { echo "::error::app.tgz 缺 ui/config"; exit 1; }
+          # 入口必须是内嵌网关形态，退回 type=url 会丢掉桌面内嵌与自动登录
+          tar xzOf "$RUNNER_TEMP/app.tgz" ui/config > "$RUNNER_TEMP/uicfg.json"
+          python3 - "$RUNNER_TEMP/uicfg.json" <<'PY'
+          import json, sys
+          cfg = json.load(open(sys.argv[1]))
+          entry = next(iter(cfg[".url"].values()))
+          assert entry["type"] == "iframe", f"桌面入口应是 iframe，实际 {entry['type']}"
+          assert entry["gatewaySocket"] == "app.sock", "gatewaySocket 应为 app.sock"
+          assert entry["gatewayPrefix"] == "/app/dsh-fnos", f"gatewayPrefix 应为 /app/dsh-fnos，实际 {entry['gatewayPrefix']}"
+          print("桌面入口配置校验通过：", entry["type"], entry["gatewayPrefix"])
+          PY
 
       - name: 冒烟：解包后按飞牛的方式跑一次 status
         run: |
