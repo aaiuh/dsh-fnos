@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VER="${1:?用法: pack_local.sh <版本> [输出目录]}"
-OUT="${2:-/vol1/@appshare/Hermes/.hermes/cache/scratch}"
+OUT="${2:-/tmp}"
 cd "$ROOT"
 
 # 1. manifest 版本
