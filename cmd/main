@@ -21,6 +21,17 @@ DSH_BIN="${NPM_PREFIX}/bin/dsh"
 LOG_FILE="${PKGVAR}/info.log"
 PID_FILE="${PKGVAR}/dsh.pid"
 
+# 网关适配层：飞牛统一网关经 app.sock 进来，外网经反代进来，两者都由同一个
+# shim 处理（剥前缀、令牌换 cookie、WebSocket 透传）。
+SHIM_SCRIPT="${APPDEST}/shim/gateway_shim.py"
+SHIM_SOCK="${APPDEST}/app.sock"
+SHIM_PORT="${DSH_SHIM_PORT:-3081}"
+SHIM_PID_FILE="${PKGVAR}/shim.pid"
+SHIM_LOG="${PKGVAR}/shim.log"
+TOKEN_FILE="${PKGVAR}/dsh.token"
+GATEWAY_PREFIX_ENV="/app/dsh-fnos"
+PUBLIC_PREFIX_ENV="/dsh"
+
 # 向导值：平台若注入环境变量就用注入值；没注入时读安装/设置页持久化的 app.env 兜底
 ENV_FILE="${PKGVAR}/app.env"
 if [ -r "${ENV_FILE}" ]; then
@@ -92,6 +103,75 @@ kill_wait() {
     return 0
 }
 
+shim_pid_alive() {
+    local pid=""
+    [ -r "${SHIM_PID_FILE}" ] && pid=$(head -n 1 "${SHIM_PID_FILE}" 2>/dev/null | tr -d '[:space:]')
+    pid_alive "${pid}"
+}
+
+shim_listening() {
+    [ -S "${SHIM_SOCK}" ] && ss -lx 2>/dev/null | grep -qF "${SHIM_SOCK}"
+}
+
+start_shim() {
+    if shim_pid_alive && shim_listening; then
+        log_info "网关适配层已在运行"
+        return 0
+    fi
+    if [ ! -r "${SHIM_SCRIPT}" ]; then
+        log_error "找不到网关适配层脚本：${SHIM_SCRIPT}"
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "系统缺少 python3，无法启动网关适配层（桌面入口会 502，端口直连不受影响）"
+        return 1
+    fi
+
+    local host
+    host=$(detect_host)
+    log_info "启动网关适配层 sock=${SHIM_SOCK} tcp=127.0.0.1:${SHIM_PORT}"
+
+    DSH_HOST="${host}" \
+    DSH_PORT="${PORT}" \
+    DSH_TOKEN_FILE="${TOKEN_FILE}" \
+    DSH_GATEWAY_SOCK="${SHIM_SOCK}" \
+    DSH_GATEWAY_PREFIX="${GATEWAY_PREFIX_ENV}" \
+    DSH_PUBLIC_TCP="127.0.0.1:${SHIM_PORT}" \
+    DSH_PUBLIC_PREFIX="${PUBLIC_PREFIX_ENV}" \
+    DSH_NO_BUFFER="1" \
+    DSH_SHIM_LOG="${SHIM_LOG}" \
+    setsid python3 "${SHIM_SCRIPT}" >>"${SHIM_LOG}" 2>&1 &
+    echo "$!" > "${SHIM_PID_FILE}"
+
+    local i=0
+    while [ "${i}" -lt 20 ]; do
+        if shim_listening || ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${SHIM_PORT}$"; then
+            log_info "网关适配层就绪（${i}s）"
+            return 0
+        fi
+        sleep 1; i=$((i + 1))
+    done
+    log_error "网关适配层未就绪，最近日志："
+    tail -n 15 "${SHIM_LOG}" 2>/dev/null | while read -r l; do log_error "  ${l}"; done
+    return 1
+}
+
+stop_shim() {
+    local pid=""
+    [ -r "${SHIM_PID_FILE}" ] && pid=$(head -n 1 "${SHIM_PID_FILE}" 2>/dev/null | tr -d '[:space:]')
+    if pid_alive "${pid}"; then
+        log_info "停止网关适配层（pid ${pid}）"
+        kill_wait "${pid}"
+    fi
+    # 兜底：按脚本路径收残留（限定 python3 调用，避免匹配到别的东西）
+    for p in $(pgrep -f "python3 .*gateway_shim.py" 2>/dev/null); do
+        [ "${p}" = "${pid}" ] && continue
+        kill_wait "${p}"
+    done
+    rm -f "${SHIM_PID_FILE}" "${SHIM_SOCK}"
+    return 0
+}
+
 stop_app() {
     local pid=""
     [ -r "${PID_FILE}" ] && pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
@@ -125,6 +205,7 @@ stop_app() {
         return 1
     fi
     log_info "已停止"
+    stop_shim
     return 0
 }
 
@@ -179,8 +260,13 @@ start_app() {
             url=$(grep -oE "http://[^ ]+\?token=[A-Za-z0-9_-]+" "${PKGVAR}/dsh.log" 2>/dev/null | tail -1)
             if [ -n "${url}" ]; then
                 printf '%s\n' "${url}" > "${APP_HOME}/entry-url.txt" 2>/dev/null || true
+                # 适配层只需 token 值：它在浏览器不带 cookie 时自己去换一次
+                printf '%s\n' "${url##*token=}" > "${TOKEN_FILE}" 2>/dev/null || true
                 log_info "首次访问链接（含启动 token，浏览器会记住登录态，之后可直接访问端口）：${url}"
+            else
+                log_error "未从日志找到启动 token，桌面入口的自动登录可能失效"
             fi
+            start_shim || log_error "网关适配层启动失败：桌面内嵌入口不可用，端口直连仍正常"
             return 0
         fi
         if ! pid_alive "${pid}"; then
@@ -204,6 +290,14 @@ case "${1:-}" in
     status)
         pid=""
         [ -r "${PID_FILE}" ] && pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        # 有适配层时两者都要活（主进程活着但适配层死了，桌面入口会 502）；
+        # 旧包没有适配层脚本时退回只看 dsh，避免升级瞬间被判异常反复重启。
+        if [ -r "${SHIM_SCRIPT}" ]; then
+            if { pid_alive "${pid}" || port_listening; } && shim_pid_alive; then
+                exit 0
+            fi
+            exit 3
+        fi
         if pid_alive "${pid}" || port_listening; then exit 0; else exit 3; fi
         ;;
     *)
