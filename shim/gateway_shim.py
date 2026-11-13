@@ -255,7 +255,9 @@ def handle(client: socket.socket, prefix: str) -> None:
             return
 
         cookies = [v for k, v in headers if k.lower() == "cookie"]
-        if not has_session_cookie(cookies):
+        had_cookie = has_session_cookie(cookies)
+        method = start.split(" ", 1)[0].upper()
+        if not had_cookie:
             cookie = mint_cookie()
             if cookie:
                 target = start.partition(" ")[2].partition(" ")[0].split("?", 1)[0]
@@ -285,6 +287,37 @@ def handle(client: socket.socket, prefix: str) -> None:
                 remaining -= len(chunk)
 
         first = recv_until(up, b"\r\n\r\n")
+        # dsh rotates both its token and its cookie name on every restart, so a
+        # session cookie sitting in the browser goes stale without any signal.
+        # dsh then answers with a plain-text 401 and the shim used to relay that
+        # straight through, which reads as "the page is broken". Detect the
+        # stale cookie, drop it and mint a fresh one instead.
+        if had_cookie and method == "GET" and b" 401 " in first.split(b"\r\n", 1)[0]:
+            peek = b""
+            try:
+                up.settimeout(5)
+                while len(peek) < 512:
+                    chunk = up.recv(512 - len(peek))
+                    if not chunk:
+                        break
+                    peek += chunk
+            except OSError:
+                pass
+            if b"authentication required" in peek:
+                cookie = mint_cookie()
+                if cookie:
+                    target = start.partition(" ")[2].partition(" ")[0].split("?", 1)[0]
+                    log(f"stale session cookie on {target}; re-minted")
+                    client.sendall((
+                        "HTTP/1.1 303 See Other\r\n"
+                        f"Location: {target}\r\n"
+                        f"Set-Cookie: {cookie}\r\n"
+                        "Cache-Control: no-store\r\nContent-Length: 0\r\n"
+                        "Connection: close\r\n\r\n"
+                    ).encode("latin-1"))
+                    up.close()
+                    return
+            first += peek
         if NO_BUFFER and b"\r\n\r\n" in first:
             # Append rather than rebuild: stripping hop-by-hop headers here
             # would drop Transfer-Encoding and leave a chunked body the browser
