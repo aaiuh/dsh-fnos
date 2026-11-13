@@ -2,20 +2,16 @@
     ".url": {
         "dsh-fnos.Application": {
             "noDisplay": false,
-            "allUsers": false,
+            "allUsers": true,
             "fileTypes": [],
-            "control": {
-                "accessPerm": "readonly"
-            },
-            "protocol": "http",
-            "gatewayPrefix": "",
-            "gatewaySocket": "",
-            "title": "DeepSeek Harness",
+            "protocol": "",
+            "gatewayPrefix": "/app/dsh-fnos",
+            "gatewaySocket": "app.sock",
+            "title": "DSH",
             "desc": "dsh 的 Web 界面，首次打开后在设置里填 DeepSeek API Key",
             "icon": "images/icon_{0}.png",
-            "type": "url",
-            "port": "${ui_port}",
-            "url": ""
+            "type": "iframe",
+            "url": "/app/dsh-fnos/"
         }
     }
 }
