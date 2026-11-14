@@ -26,11 +26,14 @@ PID_FILE="${PKGVAR}/dsh.pid"
 SHIM_SCRIPT="${APPDEST}/shim/gateway_shim.py"
 SHIM_SOCK="${APPDEST}/app.sock"
 SHIM_PORT="${DSH_SHIM_PORT:-3081}"
+SHIM_TUNNEL_PORT="${DSH_SHIM_TUNNEL_PORT:-3082}"
 SHIM_PID_FILE="${PKGVAR}/shim.pid"
 SHIM_LOG="${PKGVAR}/shim.log"
 TOKEN_FILE="${PKGVAR}/dsh.token"
 GATEWAY_PREFIX_ENV="/app/dsh-fnos"
 PUBLIC_PREFIX_ENV="/dsh"
+# 第三个监听：给 Cloudflare Tunnel 这类"直接给域名、路径无前缀"的入口用
+TUNNEL_PREFIX_ENV=""
 
 # 向导值：平台若注入环境变量就用注入值；没注入时读安装/设置页持久化的 app.env 兜底
 ENV_FILE="${PKGVAR}/app.env"
@@ -138,6 +141,8 @@ start_shim() {
     DSH_GATEWAY_PREFIX="${GATEWAY_PREFIX_ENV}" \
     DSH_PUBLIC_TCP="127.0.0.1:${SHIM_PORT}" \
     DSH_PUBLIC_PREFIX="${PUBLIC_PREFIX_ENV}" \
+    DSH_TUNNEL_TCP="127.0.0.1:${SHIM_TUNNEL_PORT}" \
+    DSH_TUNNEL_PREFIX="${TUNNEL_PREFIX_ENV}" \
     DSH_NO_BUFFER="1" \
     DSH_SHIM_LOG="${SHIM_LOG}" \
     setsid python3 "${SHIM_SCRIPT}" >>"${SHIM_LOG}" 2>&1 &
