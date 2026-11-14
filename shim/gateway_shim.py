@@ -39,6 +39,22 @@ HOP_BY_HOP = {
     "te", "trailers", "transfer-encoding", "upgrade",
 }
 
+# dsh serves its static assets without authentication — only the page shell
+# asks for a session. Redirecting asset requests to exchange a cookie breaks
+# PWA installability: the browser fetches manifest.webmanifest on its own and
+# treats a 303 as "no manifest", so Edge/Chrome report 无法安装此应用.
+STATIC_EXT = {
+    ".js", ".mjs", ".css", ".map", ".json", ".webmanifest", ".png", ".jpg",
+    ".jpeg", ".gif", ".webp", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf",
+}
+
+
+def is_static_path(path: str) -> bool:
+    last = path.rsplit("/", 1)[-1]
+    if "." not in last:
+        return False
+    return ("." + last.rsplit(".", 1)[-1]).lower() in STATIC_EXT
+
 _log_lock = threading.Lock()
 
 
@@ -258,7 +274,7 @@ def handle(client: socket.socket, prefix: str) -> None:
         had_cookie = has_session_cookie(cookies)
         method = start.split(" ", 1)[0].upper()
         path_only = (start.split(" ")[1] if " " in start else "").split("?", 1)[0]
-        if not had_cookie:
+        if not had_cookie and not is_static_path(path_only):
             cookie = mint_cookie()
             if cookie:
                 target = start.partition(" ")[2].partition(" ")[0].split("?", 1)[0]
