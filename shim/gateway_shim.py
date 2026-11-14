@@ -390,6 +390,11 @@ def main() -> int:
     sock_prefix = (os.environ.get("DSH_GATEWAY_PREFIX") or "").rstrip("/")
     tcp_spec = os.environ.get("DSH_PUBLIC_TCP") or ""
     tcp_prefix = (os.environ.get("DSH_PUBLIC_PREFIX") or "").rstrip("/")
+    # A third listener for tunnels/reverse proxies that hand us a bare hostname
+    # with no path prefix (Cloudflare Tunnel, for example). Empty prefix means
+    # "/" maps straight to dsh's "/".
+    tunnel_spec = os.environ.get("DSH_TUNNEL_TCP") or ""
+    tunnel_prefix = (os.environ.get("DSH_TUNNEL_PREFIX") or "").rstrip("/")
 
     log(f"start upstream={UP_HOST}:{UP_PORT} token_file={TOKEN_FILE}")
 
@@ -402,6 +407,11 @@ def main() -> int:
         srv = listen_tcp(tcp_spec)
         log(f"listening tcp:{tcp_spec} prefix={tcp_prefix!r}")
         threading.Thread(target=serve, args=(srv, tcp_prefix), daemon=True).start()
+        started += 1
+    if tunnel_spec:
+        srv = listen_tcp(tunnel_spec)
+        log(f"listening tcp:{tunnel_spec} prefix={tunnel_prefix!r}")
+        threading.Thread(target=serve, args=(srv, tunnel_prefix), daemon=True).start()
         started += 1
     if not started:
         log("nothing to listen on (set DSH_GATEWAY_SOCK and/or DSH_PUBLIC_TCP)")
