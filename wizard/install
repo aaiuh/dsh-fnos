@@ -3,33 +3,8 @@
         "stepTitle": "服务配置",
         "items": [
             {
-                "type": "select",
-                "field": "dsh_version",
-                "label": "dsh 版本",
-                "initValue": "0.2.2-rc.1",
-                "options": [
-                    {
-                        "label": "0.2.2-rc.1（latest · 2026-11-04）",
-                        "value": "0.2.2-rc.1"
-                    },
-                    {
-                        "label": "0.2.2-rc.3（next · 2026-11-13）",
-                        "value": "0.2.2-rc.3"
-                    },
-                    {
-                        "label": "0.2.2-rc.2（2026-11-12）",
-                        "value": "0.2.2-rc.2"
-                    },
-                    {
-                        "label": "0.2.2-alpha.3（2026-11-03）",
-                        "value": "0.2.2-alpha.3"
-                    },
-                    {
-                        "label": "0.2.2-alpha.2（2026-10-27）",
-                        "value": "0.2.2-alpha.2"
-                    }
-                ],
-                "helpText": "装哪个版本的 dsh 本体。latest 是上游标记的稳定发布，next 是更新的预发布；两者不一定相同，这里按实际发布列出。装完也能在应用设置里改，改完会自动换版本并重启。"
+                "type": "tips",
+                "helpText": "安装时自动从 npm 拉取标记为 latest 的最新版 dsh 本体（约 800 MB，需要联网）。之后由下面的「自动跟随最新版」负责保持更新。"
             },
             {
                 "type": "text",
@@ -77,6 +52,13 @@
                         "message": "请输入以 http:// 或 https:// 开头的地址"
                     }
                 ]
+            },
+            {
+                "type": "switch",
+                "field": "dsh_auto_update",
+                "label": "自动跟随最新版",
+                "initValue": "true",
+                "helpText": "开启后，应用启动时会在后台检查 npm 上的 latest；有新版本自动安装并重启一次（不额外占端口，重启期间界面短暂不可用）。关掉就固定当前版本，需要手动在应用中心覆盖安装新版 fpk 才会升级。"
             }
         ]
     }
