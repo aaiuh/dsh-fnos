@@ -2,9 +2,9 @@
 # 配置回调：飞牛应用中心要求本文件存在（缺失会 10111）。
 #
 # 三件事：
-#   1. 把向导里填的端口/地址/npm 源/版本落盘到 PKGVAR/app.env，
+#   1. 把向导里填的端口/地址/npm 源/自动更新开关落盘到 PKGVAR/app.env，
 #      让 cmd/main start 不必依赖平台是否还在注入向导环境变量；
-#   2. 用户在「应用设置」里换了 dsh 版本时，就地换版本并重启；
+#   2. 自动跟随开着时，把 dsh 对齐到 npm 上的 latest（有新版就换并重启）；
 #   3. 端口或版本变化时重启服务，让改动真正生效。
 #
 # 空值不覆盖旧值；但 wizard_host 被显式清空时表示「自动探测」，要写入空值。
@@ -35,7 +35,15 @@ old_of() {
 PORT="${ui_port:-${wizard_port:-$(old_of ui_port)}}"
 HOST="${wizard_host-$(old_of wizard_host)}"
 REG="${wizard_npm_registry:-$(old_of wizard_npm_registry)}"
-VER_WANT="${dsh_version:-$(old_of dsh_version)}"
+# 自动跟随开关：默认开。老版本没有这个字段，读不到就按开处理。
+AUTO="${dsh_auto_update-$(old_of dsh_auto_update)}"
+[ -n "${AUTO}" ] || AUTO="true"
+# 开启时目标就是 latest（每次保存都重新解析，等于「升级到最新版」）；
+# 关闭时不动版本。
+case "${AUTO}" in
+    false|False|FALSE|0|off|no) VER_WANT="" ;;
+    *) VER_WANT="latest" ;;
+esac
 
 OLD_PORT="$(old_of ui_port)"
 OLD_VER="$(cat "${APP_HOME}/.installed-version" 2>/dev/null | tr -d '[:space:]')"
@@ -45,13 +53,13 @@ TMP="${ENV_FILE}.tmp.$$"
     [ -n "${PORT}" ] && printf 'ui_port=%s\n' "${PORT}"
     printf 'wizard_host=%s\n' "${HOST}"
     [ -n "${REG}" ] && printf 'wizard_npm_registry=%s\n' "${REG}"
-    [ -n "${VER_WANT}" ] && printf 'dsh_version=%s\n' "${VER_WANT}"
+    printf 'dsh_auto_update=%s\n' "${AUTO}"
 } > "${TMP}" 2>/dev/null && mv -f "${TMP}" "${ENV_FILE}" 2>/dev/null || {
     rm -f "${TMP}" 2>/dev/null
     say "WARN 写入 ${ENV_FILE} 失败，本次设置仅在当前流程生效"
     exit 0
 }
-say "已保存：端口 ${PORT:-3080}  地址 ${HOST:-自动}  源 ${REG:-默认}  版本 ${VER_WANT:-按包内默认}"
+say "已保存：端口 ${PORT:-3080}  地址 ${HOST:-自动}  源 ${REG:-默认}  自动跟随最新版 ${AUTO}"
 
 # 解析 tag 别名（latest / next / alpha）成具体版本号
 resolve_version() {
