@@ -38,18 +38,30 @@ TUNNEL_PREFIX_ENV=""
 # 向导值：平台若注入环境变量就用注入值；没注入时读安装/设置页持久化的 app.env 兜底
 ENV_FILE="${PKGVAR}/app.env"
 if [ -r "${ENV_FILE}" ]; then
-    _saved_port=""; _saved_host=""; _saved_reg=""
+    _saved_port=""; _saved_host=""; _saved_reg=""; _saved_auto=""
     while IFS='=' read -r _k _v; do
         case "${_k}" in
             ui_port|wizard_port) _saved_port="${_v}" ;;
             wizard_host) _saved_host="${_v}" ;;
             wizard_npm_registry) _saved_reg="${_v}" ;;
+            dsh_auto_update) _saved_auto="${_v}" ;;
         esac
     done < "${ENV_FILE}"
     [ -n "${ui_port:-}" ] || ui_port="${_saved_port}"
     [ -n "${wizard_host+x}" ] || wizard_host="${_saved_host}"
     [ -n "${wizard_npm_registry:-}" ] || wizard_npm_registry="${_saved_reg}"
+    [ -n "${dsh_auto_update:-}" ] || dsh_auto_update="${_saved_auto}"
 fi
+
+# 自动跟随最新版：默认开（老包没有这个字段时也按开处理）
+AUTO_UPDATE="${dsh_auto_update:-true}"
+case "${AUTO_UPDATE}" in
+    false|False|FALSE|0|off|no) AUTO_UPDATE="false" ;;
+    *) AUTO_UPDATE="true" ;;
+esac
+AUTO_UPDATE_STAMP="${PKGVAR}/last-auto-update"
+AUTO_UPDATE_LOG="${PKGVAR}/auto-update.log"
+AUTO_UPDATE_MIN_GAP="${DSH_AUTO_UPDATE_GAP:-86400}"   # 两次检查的最小间隔（秒）
 
 PORT="${ui_port:-${wizard_port:-3080}}"
 START_WAIT="${DSH_START_WAIT:-90}"
@@ -214,6 +226,87 @@ stop_app() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# 自动跟随最新版
+#   start 时若开关是开的，起一个后台任务查 npm 上的 latest：
+#   与已装版本不同就装新的，装完经应用中心重启一次。
+#   同一台机器 24 小时内只查一次（DSH_AUTO_UPDATE_GAP 可调），失败不影响主流程。
+#   升级失败自动装回原版本，不会把应用停在半坏状态。
+# ---------------------------------------------------------------------------
+au_log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${AUTO_UPDATE_LOG}" 2>/dev/null; }
+
+auto_update_worker() {
+    local reg="${wizard_npm_registry:-https://registry.npmmirror.com}"
+    local cur latest
+    cur=$(cat "${APP_HOME}/.installed-version" 2>/dev/null | tr -d '[:space:]')
+    latest=$(PATH="${NODE_BIN}:${PATH}" npm view "@deepseek-ai/dsh" dist-tags.latest \
+                 --registry "${reg}" 2>/dev/null | tr -d '[:space:]')
+    date +%s > "${AUTO_UPDATE_STAMP}" 2>/dev/null || true
+
+    if [ -z "${latest}" ]; then
+        au_log "查不到 npm latest（源 ${reg}），本轮跳过"
+        return 0
+    fi
+    if [ "${latest}" = "${cur}" ]; then
+        au_log "已是最新 ${cur}，无需升级"
+        return 0
+    fi
+
+    au_log "发现新版本 ${cur:-未装} → ${latest}，开始升级（约 800 MB）"
+    export PATH="${NODE_BIN}:${PATH}"
+    export HOME="${APP_HOME}" DSH_HOME="${APP_HOME}"
+    export NPM_CONFIG_PREFIX="${NPM_PREFIX}"
+    export NPM_CONFIG_CACHE="${APP_HOME}/.npm-cache"
+
+    if ! npm install -g "@deepseek-ai/dsh@${latest}" \
+            --prefix "${NPM_PREFIX}" --registry "${reg}" \
+            --no-audit --no-fund --loglevel=warn >> "${AUTO_UPDATE_LOG}" 2>&1; then
+        au_log "ERROR 升级失败，回退到 ${cur}"
+        if [ -n "${cur}" ]; then
+            npm install -g "@deepseek-ai/dsh@${cur}" \
+                --prefix "${NPM_PREFIX}" --registry "${reg}" \
+                --no-audit --no-fund --loglevel=warn >> "${AUTO_UPDATE_LOG}" 2>&1 || true
+        fi
+        return 1
+    fi
+
+    "${DSH_BIN}" --version > "${APP_HOME}/.installed-version" 2>/dev/null
+    au_log "升级完成：$(cat "${APP_HOME}/.installed-version" 2>/dev/null)"
+    log_info "dsh 已自动升级到 $(cat "${APP_HOME}/.installed-version" 2>/dev/null)，重启应用中"
+
+    # 必须经应用中心重启：直接拉进程的话平台状态不刷新，会一直显示「启动中」
+    local cli="/usr/local/bin/appcenter-cli"
+    if [ -x "${cli}" ] && "${cli}" stop dsh-fnos >/dev/null 2>&1; then
+        sleep 2
+        if "${cli}" start dsh-fnos >/dev/null 2>&1; then
+            au_log "已通过应用中心重启"
+            return 0
+        fi
+    fi
+    au_log "WARN 应用中心重启失败，新版本已装好，下次启动生效"
+    return 0
+}
+
+schedule_auto_update() {
+    if [ "${AUTO_UPDATE}" != "true" ]; then
+        log_info "自动跟随最新版已关闭，跳过检查"
+        return 0
+    fi
+    if [ -r "${AUTO_UPDATE_STAMP}" ]; then
+        local last age
+        last=$(cat "${AUTO_UPDATE_STAMP}" 2>/dev/null | tr -d '[:space:]')
+        case "${last}" in ''|*[!0-9]*) last=0 ;; esac
+        age=$(( $(date +%s) - last ))
+        if [ "${age}" -ge 0 ] && [ "${age}" -lt "${AUTO_UPDATE_MIN_GAP}" ]; then
+            log_info "自动检查更新：$(( AUTO_UPDATE_MIN_GAP - age ))s 后再查，本轮跳过"
+            return 0
+        fi
+    fi
+    ( auto_update_worker ) >/dev/null 2>&1 &
+    log_info "已在后台安排检查 npm 最新版（pid $!）"
+    return 0
+}
+
 start_app() {
     if [ ! -x "${DSH_BIN}" ]; then
         log_error "找不到 dsh 可执行文件：${DSH_BIN}（安装未完成？）"
@@ -272,6 +365,7 @@ start_app() {
                 log_error "未从日志找到启动 token，桌面入口的自动登录可能失效"
             fi
             start_shim || log_error "网关适配层启动失败：桌面内嵌入口不可用，端口直连仍正常"
+            schedule_auto_update
             return 0
         fi
         if ! pid_alive "${pid}"; then
