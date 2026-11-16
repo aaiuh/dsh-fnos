@@ -156,14 +156,14 @@ jobs:
           PY
           grep -E '^(appname|version|platform|service_port|install_dep_apps)=' manifest
 
-      - name: 渲染向导里的版本选项
+      - name: 校验向导（版本恒为 npm latest，不再有版本下拉）
         run: |
           set -euo pipefail
-          # 上游 dist-tags 不一定跟着发版走，把最近几个版本连同所属 tag 一起列出来让人选
-          python3 build/render_wizard.py --registry "${NPM_REGISTRY:-https://registry.npmmirror.com}" \
-            --keep 5 --default "$UPSTREAM"
-          python3 -c "import json;[json.load(open(f)) for f in ['wizard/install','wizard/config','wizard/uninstall']]"
-          grep -c '"value"' wizard/install
+          # 版本策略已收敛成「永远跟随 npm latest」：安装时解析 dist-tags.latest，
+          # 之后由 cmd/main 在启动时后台检查并自动升级（设置里可关）。
+          # 这一步只做幂等清理与结构校验，宁可构建失败也不让新旧实现混进包里。
+          python3 build/render_wizard.py --registry "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+          python3 build/verify_wizard.py
 
       - name: 生成 app.tgz 并写入 checksum
         run: |
