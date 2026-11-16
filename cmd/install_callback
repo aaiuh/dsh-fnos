@@ -34,28 +34,28 @@ if [ ! -x "${NODE_BIN}/node" ]; then
 fi
 
 DSH_VER=""
-# 优先级：用户在向导里选的版本 > 包内 VERSION。
-# 上游 dist-tags 不跟着发版走（latest 可能停在旧版），所以让装的人自己选更可靠。
-if [ -n "${dsh_version:-}" ]; then
-    case "${dsh_version}" in
-        latest|next|alpha)
-            DSH_VER=$(PATH="${NODE_BIN}:${PATH}" npm view "${PKG}" "dist-tags.${dsh_version}" \
-                        --registry "${REGISTRY}" 2>/dev/null | tr -d '[:space:]')
-            say "向导选择 ${dsh_version} → 解析为 ${DSH_VER:-（失败）}"
-            ;;
-        *)
-            DSH_VER="${dsh_version}"
-            say "向导选择版本 ${DSH_VER}"
-            ;;
-    esac
-fi
+# 默认装 npm 上标记 latest 的最新版：用户不需要选版本，装完由「自动跟随最新版」维护。
+# 兜底顺序：向导显式指定（兼容老包/手动 dispatch）> npm latest > 包内 VERSION。
+WANT="${dsh_version:-latest}"
+case "${WANT}" in
+    latest|next|alpha)
+        DSH_VER=$(PATH="${NODE_BIN}:${PATH}" npm view "${PKG}" "dist-tags.${WANT}" \
+                    --registry "${REGISTRY}" 2>/dev/null | tr -d '[:space:]')
+        say "${WANT} → 解析为 ${DSH_VER:-（失败）}"
+        ;;
+    *)
+        DSH_VER="${WANT}"
+        say "指定版本 ${DSH_VER}"
+        ;;
+esac
 if [ -z "${DSH_VER}" ]; then
+    say "WARN 解析 ${WANT} 失败（npm 源不可达？），退回包内 VERSION"
     for f in "${APPDEST}/VERSION" "${APPDEST}/../VERSION" "${APPDEST}/cmd/VERSION"; do
         [ -r "${f}" ] && DSH_VER=$(head -n 1 "${f}" | tr -d '[:space:]') && break
     done
 fi
 if [ -z "${DSH_VER}" ]; then
-    say "ERROR 既没有向导选择，包内也没有 VERSION，无法确定要安装的 dsh 版本"
+    say "ERROR 既解析不到 latest，包内也没有 VERSION，无法确定要安装的 dsh 版本"
     exit 1
 fi
 
